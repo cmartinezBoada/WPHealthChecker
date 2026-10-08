@@ -1,13 +1,20 @@
+import logo from './assets/logo.svg'
+import Header from './components/Header'
+
+// Mocked data until the real WordPress project is wired in
+const APP_NAME = 'WP Health Checker'
+const PROJECT_NAME = 'Acme Coffee Blog'
+
 function App() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
-      <div className="w-full max-w-md rounded-2xl bg-white p-8 text-center shadow-lg">
-        <h1 className="text-3xl font-bold text-slate-900">WP Health Checker</h1>
-        <p className="mt-3 text-slate-600">
-          React + TypeScript + Tailwind CSS is ready to go.
-        </p>
-      </div>
-    </main>
+    <div className="min-h-screen bg-slate-50">
+      <Header
+        appName={APP_NAME}
+        projectName={PROJECT_NAME}
+        logoSrc={logo}
+        logoAlt="WP Health Checker logo"
+      />
+    </div>
   )
 }
 
