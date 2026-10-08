@@ -12,9 +12,9 @@ function Plugins({ plugins }: PluginsProps) {
   return (
     <section>
       <h2 className="mb-3 text-lg font-semibold text-slate-900">Plugins</h2>
-      <ul className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <ul className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:gap-4 sm:p-4 lg:gap-5 lg:p-6">
         {plugins.map((plugin) => (
-          <li key={plugin.name} className="flex items-center gap-6">
+          <li key={plugin.name} className="flex items-center gap-3 sm:gap-6 lg:gap-10">
             <span className="min-w-0 flex-1 truncate font-semibold text-slate-900">
               {plugin.name}
             </span>

@@ -28,9 +28,11 @@ function App() {
         logoAlt="WP Health Checker logo"
       />
       <main className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-6">
-        {ELEMENTS.map((element) => (
-          <StatusCard key={element.name} {...element} />
-        ))}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {ELEMENTS.map((element) => (
+            <StatusCard key={element.name} {...element} />
+          ))}
+        </div>
         <Plugins plugins={PLUGINS} />
       </main>
     </div>
