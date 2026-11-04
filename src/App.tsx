@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import logo from './assets/logo.svg'
 import Header from './components/Header'
 import Plugins, { type Plugin } from './components/Plugins'
-import StatusCard, { type HealthItem } from './components/StatusCard'
+import StatusCard, { type HealthDetail, type HealthItem } from './components/StatusCard'
 import {
   chargerNomProjet,
   chargerPlugins,
@@ -22,21 +22,75 @@ function pluriel(nombre: number, mot: string): string {
   return `${nombre} ${mot}${nombre > 1 ? 's' : ''}`
 }
 
+// Libellés courts des tests de Santé du site (identifiants du cœur de WordPress)
+const LIBELLES_TESTS: Record<string, string> = {
+  wordpress_version: 'Version WordPress',
+  plugin_version: 'Plugins',
+  theme_version: 'Thèmes',
+  php_version: 'Version PHP',
+  php_extensions: 'Extensions PHP',
+  php_default_timezone: 'Fuseau PHP',
+  php_sessions: 'Sessions PHP',
+  sql_server: 'Base de données',
+  utf8mb4_support: 'Encodage UTF8MB4',
+  ssl_support: 'SSL',
+  https_status: 'HTTPS',
+  scheduled_events: 'Tâches planifiées',
+  http_requests: 'Requêtes HTTP',
+  rest_availability: 'API REST',
+  is_in_debug_mode: 'Mode débogage',
+  file_uploads: 'Téléversements',
+  dotorg_communication: 'Connexion WordPress.org',
+  background_updates: 'Mises à jour auto',
+  plugin_theme_auto_updates: 'Mises à jour auto',
+  loopback_requests: 'Requêtes loopback',
+  authorization_header: 'En-tête Authorization',
+  persistent_object_cache: 'Cache objet',
+  page_cache: 'Cache de page',
+  available_updates_disk_space: 'Espace disque',
+  update_temp_backup_writable: 'Dossier sauvegarde',
+  autoloaded_options: 'Options autochargées',
+  search_engine_visibility: 'Visibilité moteurs',
+}
+
+// Test inconnu (plugin tiers) : 'mon_test' -> 'Mon test'
+function libelleTest(test: string): string {
+  const libelle = LIBELLES_TESTS[test]
+  if (libelle) return libelle
+  const texte = test.replace(/[_-]+/g, ' ').trim()
+  return texte ? texte.charAt(0).toUpperCase() + texte.slice(1) : 'Test inconnu'
+}
+
+// Les critiques d'abord, sans doublons de libellé
+function versDetails(sante: SanteSite): HealthDetail[] {
+  const details = new Map<string, HealthDetail>()
+  for (const statut of ['critical', 'recommended'] as const) {
+    for (const probleme of sante.issues) {
+      const label = libelleTest(probleme.test)
+      if (probleme.status === statut && !details.has(label)) {
+        details.set(label, { label, status: statut === 'critical' ? 'critical' : 'warning' })
+      }
+    }
+  }
+  return [...details.values()]
+}
+
 // Transforme le résultat de Santé du site en carte
 function versCarteSante(sante: SanteSite | null): HealthItem {
   const name = 'Santé du site'
   if (sante === null) {
     return { name, value: 'Jamais analysé', status: 'warning' }
   }
+  const details = versDetails(sante)
   if (sante.critical > 0) {
     const parties = [pluriel(sante.critical, 'critique')]
     if (sante.recommended > 0) {
       parties.push(pluriel(sante.recommended, 'recommandé'))
     }
-    return { name, value: parties.join(' · '), status: 'critical' }
+    return { name, value: parties.join(' · '), status: 'critical', details }
   }
   if (sante.recommended > 0) {
-    return { name, value: pluriel(sante.recommended, 'recommandé'), status: 'warning' }
+    return { name, value: pluriel(sante.recommended, 'recommandé'), status: 'warning', details }
   }
   return { name, value: 'Tout est bon', status: 'ok' }
 }
@@ -111,7 +165,7 @@ function App() {
         logoAlt="WP Health Checker logo"
       />
       <main className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-6">
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 lg:grid-cols-3">
           {elements.map((element) => (
             <StatusCard key={element.name} {...element} />
           ))}

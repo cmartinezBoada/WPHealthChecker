@@ -85,27 +85,67 @@ function whcc_can_view_site_health() {
 	return current_user_can( 'manage_options' );
 }
 
+// The transient only stores counts, so run the tests like WP_Site_Health::wp_cron_scheduled_check()
+// to also know which ones failed.
 function whcc_get_site_health() {
-	// Saved by WP Admin > Tools > Site Health, e.g. '{"good":15,"recommended":4,"critical":1}'.
-	$transient = get_transient( 'health-check-site-status-result' );
+	require_once ABSPATH . 'wp-admin/includes/admin.php';
 
-	if ( ! is_string( $transient ) ) {
-		return rest_ensure_response( null );
+	$site_health = WP_Site_Health::get_instance();
+	$tests       = WP_Site_Health::get_tests();
+
+	// Don't run https test on development environments.
+	if ( $site_health->is_development_environment() ) {
+		unset( $tests['async']['https_status'] );
 	}
 
-	$data = json_decode( $transient, true );
+	$callbacks = array();
 
-	if ( ! is_array( $data ) || ! isset( $data['good'], $data['recommended'], $data['critical'] ) ) {
-		return rest_ensure_response( null );
+	foreach ( $tests['direct'] as $test ) {
+		if ( ! empty( $test['skip_cron'] ) ) {
+			continue;
+		}
+
+		if ( is_string( $test['test'] ) && is_callable( array( $site_health, 'get_test_' . $test['test'] ) ) ) {
+			$callbacks[] = array( $site_health, 'get_test_' . $test['test'] );
+		} elseif ( is_callable( $test['test'] ) ) {
+			$callbacks[] = $test['test'];
+		}
 	}
 
-	return rest_ensure_response(
-		array(
-			'good'        => (int) $data['good'],
-			'recommended' => (int) $data['recommended'],
-			'critical'    => (int) $data['critical'],
-		)
+	// Async tests without a direct runner would need a loopback HTTP request: skip them.
+	foreach ( $tests['async'] as $test ) {
+		if ( empty( $test['skip_cron'] ) && ! empty( $test['async_direct_test'] ) && is_callable( $test['async_direct_test'] ) ) {
+			$callbacks[] = $test['async_direct_test'];
+		}
+	}
+
+	$site_status = array(
+		'good'        => 0,
+		'recommended' => 0,
+		'critical'    => 0,
+		'issues'      => array(),
 	);
+
+	foreach ( $callbacks as $callback ) {
+		// Same filter as WP_Site_Health::perform_test(), which is private.
+		$result = apply_filters( 'site_status_test_result', call_user_func( $callback ) );
+
+		if ( ! is_array( $result ) || empty( $result['status'] ) ) {
+			continue;
+		}
+
+		if ( 'critical' === $result['status'] || 'recommended' === $result['status'] ) {
+			++$site_status[ $result['status'] ];
+			$site_status['issues'][] = array(
+				'test'   => isset( $result['test'] ) ? (string) $result['test'] : '',
+				'status' => $result['status'],
+			);
+		} else {
+			++$site_status['good'];
+		}
+	}
+
+	return rest_ensure_response( $site_status );
 }
 
 function whcc_get_updates() {

@@ -71,10 +71,24 @@ export async function chargerVersionWp(): Promise<{ version: string; latest: str
   return { version: donnees.version, latest: donnees.latest }
 }
 
+export type ProblemeSante = {
+  test: string                      // ex. 'php_version'
+  status: 'critical' | 'recommended'
+}
+
 export type SanteSite = {
   good: number
   recommended: number
   critical: number
+  issues: ProblemeSante[]
+}
+
+function estProblemeSante(valeur: unknown): valeur is ProblemeSante {
+  return (
+    typeof valeur === 'object' && valeur !== null &&
+    'test' in valeur && typeof valeur.test === 'string' &&
+    'status' in valeur && (valeur.status === 'critical' || valeur.status === 'recommended')
+  )
 }
 
 // Réponse du plugin WP Health Checker Connector : null si Santé du site n'a jamais été analysé
@@ -91,7 +105,11 @@ export async function chargerSanteSite(): Promise<SanteSite | null> {
   ) {
     throw new Error('Réponse inattendue de WordPress')
   }
-  return { good: donnees.good, recommended: donnees.recommended, critical: donnees.critical }
+  // "issues" est absent avec une ancienne version du plugin connecteur
+  const issues = 'issues' in donnees && Array.isArray(donnees.issues)
+    ? donnees.issues.filter(estProblemeSante)
+    : []
+  return { good: donnees.good, recommended: donnees.recommended, critical: donnees.critical, issues }
 }
 
 export async function chargerPlugins(): Promise<Plugin[]> {
