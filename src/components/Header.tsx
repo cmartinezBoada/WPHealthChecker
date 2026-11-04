@@ -2,7 +2,7 @@ type HeaderProps = {
   appName: string
   projectName: string
   logoSrc: string
-  logoAlt?: string
+  logoAlt?: string  //optional parameter
 }
 
 function Header({ appName, projectName, logoSrc, logoAlt = '' }: HeaderProps) {
@@ -20,3 +20,5 @@ function Header({ appName, projectName, logoSrc, logoAlt = '' }: HeaderProps) {
 }
 
 export default Header
+
+

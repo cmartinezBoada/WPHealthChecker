@@ -2,12 +2,12 @@ export type Plugin = {
   name: string
   version: string
   updateAvailable: boolean
+  newVersion?: string
 }
 
 type PluginsProps = {
   plugins: Plugin[]
 }
-
 function Plugins({ plugins }: PluginsProps) {
   return (
     <section>
@@ -18,9 +18,14 @@ function Plugins({ plugins }: PluginsProps) {
             <span className="min-w-0 flex-1 truncate font-semibold text-slate-900">
               {plugin.name}
             </span>
-            <div className="w-20 shrink-0">
+            <div className="w-28 shrink-0">
               <p className="text-xs uppercase text-slate-500">Version</p>
-              <p className="text-sm text-slate-900">{plugin.version}</p>
+              <p className="whitespace-nowrap text-sm text-slate-900">
+                {plugin.version}
+                {plugin.updateAvailable && plugin.newVersion && (
+                  <span className="text-amber-700"> → {plugin.newVersion}</span>
+                )}
+              </p>
             </div>
             <div className="w-32 shrink-0">
               <p className="text-xs uppercase text-slate-500">Update</p>

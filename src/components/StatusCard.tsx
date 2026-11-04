@@ -1,6 +1,6 @@
-export type Status = 'ok' | 'warning' | 'critical'
+export type Status = 'ok' | 'warning' | 'critical' | 'warning'
 
-type StatusCardProps = {
+export type HealthItem = {
   name: string
   value: string
   status: Status
@@ -12,7 +12,7 @@ const STATUS_STYLES: Record<Status, { label: string; badge: string; dot: string 
   critical: { label: 'Critical', badge: 'bg-red-50 text-red-700', dot: 'bg-red-500' },
 }
 
-function StatusCard({ name, value, status }: StatusCardProps) {
+function StatusCard({ name, value, status }: HealthItem) {
   const { label, badge, dot } = STATUS_STYLES[status]
 
   return (
