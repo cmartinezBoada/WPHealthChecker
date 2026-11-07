@@ -57,6 +57,16 @@ function whcc_register_routes() {
 
 	register_rest_route(
 		'health-checker/v1',
+		'/backups',
+		array(
+			'methods'             => WP_REST_Server::READABLE,
+			'callback'            => 'whcc_get_backups',
+			'permission_callback' => 'whcc_can_view_backups',
+		)
+	);
+
+	register_rest_route(
+		'health-checker/v1',
 		'/update-plugin',
 		array(
 			'methods'             => WP_REST_Server::CREATABLE,
@@ -72,6 +82,68 @@ function whcc_register_routes() {
 					'validate_callback' => 'rest_validate_request_arg',
 				),
 			),
+		)
+	);
+}
+
+function whcc_can_view_backups() {
+	return current_user_can( 'manage_options' );
+}
+
+// Most recent completed Duplicator (free) backup that still has a copy, locally or remotely.
+// Read only. Never answers "none" when it can't tell: Duplicator missing, table missing or a
+// database error all give "unknown".
+function whcc_get_backups() {
+	global $wpdb;
+
+	if ( ! function_exists( 'is_plugin_active' ) ) {
+		require_once ABSPATH . 'wp-admin/includes/plugin.php';
+	}
+	if ( ! is_plugin_active( 'duplicator/duplicator.php' ) ) {
+		return rest_ensure_response( array( 'state' => 'unknown' ) );
+	}
+
+	// Duplicator uses base_prefix: one table for a whole multisite network.
+	$table = $wpdb->base_prefix . 'duplicator_backups';
+	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) ) !== $table ) {
+		return rest_ensure_response( array( 'state' => 'unknown' ) );
+	}
+
+	// status 100 = AbstractPackage::STATUS_COMPLETE. A complete backup whose files were all
+	// deleted keeps its row but loses both HAVE_LOCAL and HAVE_REMOTE flags.
+	$created = $wpdb->get_var(
+		$wpdb->prepare(
+			"SELECT created FROM `{$table}`
+			WHERE type = %s AND status = %d
+				AND ( FIND_IN_SET( %s, flags ) > 0 OR FIND_IN_SET( %s, flags ) > 0 )
+			ORDER BY created DESC
+			LIMIT 1",
+			'Standard',
+			100,
+			'HAVE_LOCAL',
+			'HAVE_REMOTE'
+		)
+	);
+
+	if ( '' !== $wpdb->last_error ) {
+		error_log( 'WP Health Checker Connector: reading Duplicator backups failed: ' . $wpdb->last_error );
+		return rest_ensure_response( array( 'state' => 'unknown' ) );
+	}
+
+	if ( null === $created ) {
+		return rest_ensure_response( array( 'state' => 'none' ) );
+	}
+
+	// Duplicator writes "created" with gmdate(): the value is UTC.
+	$date = DateTimeImmutable::createFromFormat( 'Y-m-d H:i:s', (string) $created, new DateTimeZone( 'UTC' ) );
+	if ( false === $date || $date->getTimestamp() <= 0 ) {
+		return rest_ensure_response( array( 'state' => 'unknown' ) );
+	}
+
+	return rest_ensure_response(
+		array(
+			'state'      => 'found',
+			'created_at' => $date->format( 'Y-m-d\TH:i:s\Z' ),
 		)
 	);
 }

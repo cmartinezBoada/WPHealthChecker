@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import { ErreurApi, mettreAJourPlugin } from '../lib/wordpress'
+import type { ChargementSauvegarde } from '../lib/sauvegardes'
 import { ErreurNonAuthentifie } from '../lib/session'
+import { ErreurApi, mettreAJourPlugin } from '../lib/wordpress'
+import ConfirmationMiseAJour from './ConfirmationMiseAJour'
 
 export type Plugin = {
   id: string
@@ -25,6 +27,8 @@ type PluginsProps = {
   plugins: Plugin[]
   // Recharge la liste depuis le serveur ; rejette en cas d'échec
   onRecharger: () => Promise<void>
+  // Affichée dans la confirmation de mise à jour
+  sauvegarde: ChargementSauvegarde
 }
 
 // Message affiché sous la ligne d'un plugin après une tentative de mise à jour
@@ -39,21 +43,21 @@ function texteErreur(e: unknown): string {
   return e instanceof Error ? e.message : 'Erreur inconnue'
 }
 
-function Plugins({ plugins, onRecharger }: PluginsProps) {
+function Plugins({ plugins, onRecharger, sauvegarde }: PluginsProps) {
   // Une seule mise à jour à la fois : WordPress ne gère pas bien deux mises à jour simultanées
   const [idEnCours, setIdEnCours] = useState<string | null>(null)
   const [messages, setMessages] = useState<Record<string, MessagePlugin>>({})
   const [alertesSite, setAlertesSite] = useState<AlerteSite[]>([])
+  // Mise à jour en attente de confirmation (dialogue ouvert)
+  const [demande, setDemande] = useState<{ plugin: Plugin; nouvelleVersion: string } | null>(null)
 
   const definirMessage = (id: string, message: MessagePlugin | null) =>
     setMessages(({ [id]: _ancien, ...autres }) => (message ? { ...autres, [id]: message } : autres))
 
   const verificationImpossible = plugins.some((plugin) => plugin.miseAJour.etat === 'inconnu')
 
-  const mettreAJour = async (plugin: Plugin, nouvelleVersion: string) => {
-    const versions = `${plugin.version} → ${nouvelleVersion}`
-    if (!window.confirm(`Mettre à jour « ${plugin.name} » ?\n\nVersion ${versions}`)) return
-
+  // Lancée seulement après confirmation dans ConfirmationMiseAJour
+  const mettreAJour = async (plugin: Plugin) => {
     setIdEnCours(plugin.id)
     definirMessage(plugin.id, null)
     try {
@@ -92,6 +96,20 @@ function Plugins({ plugins, onRecharger }: PluginsProps) {
   return (
     <section>
       <h2 className="mb-3 text-lg font-semibold text-slate-900">Plugins</h2>
+
+      {demande && (
+        <ConfirmationMiseAJour
+          nomPlugin={demande.plugin.name}
+          versionActuelle={demande.plugin.version}
+          nouvelleVersion={demande.nouvelleVersion}
+          sauvegarde={sauvegarde}
+          onConfirmer={() => {
+            setDemande(null)
+            void mettreAJour(demande.plugin)
+          }}
+          onAnnuler={() => setDemande(null)}
+        />
+      )}
 
       {alertesSite.length > 0 && (
         <div
@@ -162,7 +180,7 @@ function Plugins({ plugins, onRecharger }: PluginsProps) {
                 <div className="w-full shrink-0 sm:w-36 sm:text-right">
                   <button
                     type="button"
-                    onClick={() => mettreAJour(plugin, miseAJour.nouvelleVersion)}
+                    onClick={() => setDemande({ plugin, nouvelleVersion: miseAJour.nouvelleVersion })}
                     disabled={idEnCours !== null}
                     className={`rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium whitespace-nowrap text-white hover:bg-slate-700 disabled:opacity-50 ${
                       enCours ? 'disabled:cursor-wait' : 'disabled:cursor-not-allowed'

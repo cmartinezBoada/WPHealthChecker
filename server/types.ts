@@ -40,6 +40,12 @@ export type ResultatMiseAJourPlugin = {
   http_status: number | null        // null si la page d'accueil n'a pas répondu du tout
 }
 
+// Dernière sauvegarde Duplicator terminée dont il reste une copie (GET /api/sauvegardes)
+export type DerniereSauvegarde =
+  | { state: 'unknown' }            // Duplicator absent ou illisible : ne jamais afficher « aucune »
+  | { state: 'none' }               // aucune sauvegarde terminée avec des fichiers
+  | { state: 'found'; created_at: string } // ISO 8601 UTC, ex. '2023-05-17T15:56:29Z'
+
 export type Performance = {
   response_time_ms: number          // médiane de 3 requêtes vers la page d'accueil
   measured_at: number               // timestamp Unix (secondes)

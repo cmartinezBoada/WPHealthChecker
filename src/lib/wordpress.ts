@@ -1,5 +1,6 @@
 import type { Plugin } from '../components/Plugins.tsx'
 import type {
+  DerniereSauvegarde,
   Plugin as PluginApi,
   Performance,
   ResultatMiseAJourPlugin,
@@ -9,6 +10,7 @@ import type {
 import { ErreurNonAuthentifie, signalerNonAuthentifie } from './session.ts'
 
 export type {
+  DerniereSauvegarde,
   Performance,
   ProblemeSante,
   ResultatMiseAJourPlugin,
@@ -89,6 +91,10 @@ export function chargerVersionWp(): Promise<VersionWp> {
 // null si Santé du site n'a jamais été analysé
 export function chargerSanteSite(): Promise<SanteSite | null> {
   return requeteApi('/sante-site')
+}
+
+export function chargerDerniereSauvegarde(): Promise<DerniereSauvegarde> {
+  return requeteApi('/sauvegardes')
 }
 
 // null tant que la première mesure WP-Cron n'a pas eu lieu

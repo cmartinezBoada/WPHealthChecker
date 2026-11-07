@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import { connexion, deconnexion, exigerSession, moi } from './auth.ts'
 import { PORT, WP_URL } from './config.ts'
 import {
+  chargerDerniereSauvegarde,
   chargerNomProjet,
   chargerPerformance,
   chargerPlugins,
@@ -67,6 +68,7 @@ route('/nom-projet', chargerNomProjet)
 route('/version-wp', chargerVersionWp)
 route('/sante-site', chargerSanteSite)
 route('/performance', chargerPerformance)
+route('/sauvegardes', chargerDerniereSauvegarde)
 
 serve({ fetch: app.fetch, port: PORT }, ({ port }) => {
   console.log(`[api] http://localhost:${port}/api → ${WP_URL}`)

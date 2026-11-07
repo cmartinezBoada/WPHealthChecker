@@ -1,5 +1,6 @@
 import { WP_APP_PASSWORD, WP_URL, WP_USER } from './config.ts'
 import type {
+  DerniereSauvegarde,
   Performance,
   Plugin,
   ProblemeSante,
@@ -242,6 +243,25 @@ export async function chargerSanteSite(): Promise<SanteSite | null> {
     ? donnees.issues.filter(estProblemeSante)
     : []
   return { good: donnees.good, recommended: donnees.recommended, critical: donnees.critical, issues }
+}
+
+// Réponse du connecteur : { state: 'unknown' | 'none' } ou { state: 'found', created_at }
+export async function chargerDerniereSauvegarde(): Promise<DerniereSauvegarde> {
+  const donnees = await requeteWp('/health-checker/v1/backups')
+  if (typeof donnees !== 'object' || donnees === null || !('state' in donnees)) {
+    throw new Error('Réponse inattendue de WordPress')
+  }
+  if (donnees.state === 'unknown' || donnees.state === 'none') {
+    return { state: donnees.state }
+  }
+  if (
+    donnees.state === 'found' &&
+    'created_at' in donnees && typeof donnees.created_at === 'string' &&
+    !Number.isNaN(Date.parse(donnees.created_at))
+  ) {
+    return { state: 'found', created_at: donnees.created_at }
+  }
+  throw new Error('Réponse inattendue de WordPress')
 }
 
 // Mesurée toutes les heures par WP-Cron : null tant que la première mesure n'a pas eu lieu

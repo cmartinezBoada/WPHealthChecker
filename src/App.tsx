@@ -4,7 +4,9 @@ import Connexion from './components/Connexion'
 import Header from './components/Header'
 import Plugins, { type Plugin } from './components/Plugins'
 import StatusCard, { type HealthDetail, type HealthItem } from './components/StatusCard'
+import { decrireSauvegarde, type ChargementSauvegarde } from './lib/sauvegardes'
 import {
+  chargerDerniereSauvegarde,
   chargerNomProjet,
   chargerPerformance,
   chargerPlugins,
@@ -31,6 +33,21 @@ function versCartePerformance(mesure: Performance | null): HealthItem {
     : response_time_ms <= SEUIL_PERFORMANCE_CRITIQUE_MS ? 'warning'
     : 'critical'
   return { name: 'Performance', value: `${response_time_ms} ms`, status }
+}
+
+// Pas de carte pendant le chargement, comme les autres cartes
+function versCarteSauvegardes(chargement: ChargementSauvegarde): HealthItem | undefined {
+  const name = 'Sauvegardes'
+  switch (chargement.etat) {
+    case 'chargement':
+      return undefined
+    case 'erreur':
+      return { name, value: 'Indisponible', status: 'warning' }
+    case 'charge': {
+      const { texte, status } = decrireSauvegarde(chargement.sauvegarde, new Date())
+      return { name, value: texte, status }
+    }
+  }
 }
 
 function pluriel(nombre: number, mot: string): string {
@@ -169,7 +186,19 @@ function TableauDeBord({ onDeconnexion }: { onDeconnexion: () => Promise<void> }
       })
   }, [])
 
-  const elements: HealthItem[] = [versionWp, santeSite, performance].filter(
+  // Partagée entre la carte Sauvegardes et la confirmation de mise à jour des plugins
+  const [sauvegarde, setSauvegarde] = useState<ChargementSauvegarde>({ etat: 'chargement' })
+
+  useEffect(() => {
+    chargerDerniereSauvegarde()
+      .then((resultat) => setSauvegarde({ etat: 'charge', sauvegarde: resultat }))
+      .catch((e: unknown) => {
+        console.error('[App] Sauvegardes indisponibles :', e)
+        setSauvegarde({ etat: 'erreur' })
+      })
+  }, [])
+
+  const elements: HealthItem[] = [versionWp, santeSite, performance, versCarteSauvegardes(sauvegarde)].filter(
     (element) => element !== undefined
   )
 
@@ -216,7 +245,7 @@ function TableauDeBord({ onDeconnexion }: { onDeconnexion: () => Promise<void> }
           </p>
         )}
         {etatPlugins.etat === 'succes' && (
-          <Plugins plugins={etatPlugins.plugins} onRecharger={rechargerPlugins} />
+          <Plugins plugins={etatPlugins.plugins} onRecharger={rechargerPlugins} sauvegarde={sauvegarde} />
         )}
       </main>
     </div>
