@@ -173,6 +173,13 @@ function TableauDeBord({ onDeconnexion }: { onDeconnexion: () => Promise<void> }
     (element) => element !== undefined
   )
 
+  // Après une mise à jour : en cas d'échec, l'ancienne liste reste affichée et l'erreur
+  // remonte au composant Plugins (qui garde ses messages et alertes)
+  const rechargerPlugins = async () => {
+    const liste = await chargerPlugins()
+    setEtatPlugins({ etat: 'succes', plugins: liste })
+  }
+
   useEffect(() => {
     chargerPlugins()
       .then((liste) => setEtatPlugins({ etat: 'succes', plugins: liste }))
@@ -208,7 +215,9 @@ function TableauDeBord({ onDeconnexion }: { onDeconnexion: () => Promise<void> }
             Impossible de charger les plugins : {etatPlugins.message}
           </p>
         )}
-        {etatPlugins.etat === 'succes' && <Plugins plugins={etatPlugins.plugins} />}
+        {etatPlugins.etat === 'succes' && (
+          <Plugins plugins={etatPlugins.plugins} onRecharger={rechargerPlugins} />
+        )}
       </main>
     </div>
   )

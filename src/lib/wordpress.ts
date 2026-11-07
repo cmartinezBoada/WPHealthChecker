@@ -1,22 +1,52 @@
 import type { Plugin } from '../components/Plugins.tsx'
-import type { Plugin as PluginApi, Performance, SanteSite, VersionWp } from '../../server/types.ts'
+import type {
+  Plugin as PluginApi,
+  Performance,
+  ResultatMiseAJourPlugin,
+  SanteSite,
+  VersionWp,
+} from '../../server/types.ts'
 import { ErreurNonAuthentifie, signalerNonAuthentifie } from './session.ts'
 
-export type { Performance, ProblemeSante, SanteSite, VersionWp } from '../../server/types.ts'
+export type {
+  Performance,
+  ProblemeSante,
+  ResultatMiseAJourPlugin,
+  SanteSite,
+  VersionWp,
+} from '../../server/types.ts'
 
 // Appelle le backend (server/), qui seul détient les identifiants WordPress.
 // Les réponses sont déjà vérifiées par le serveur.
 // Un 401 signifie que la session a expiré : l'application revient au formulaire de connexion.
-async function requeteApi<T>(chemin: string): Promise<T> {
-  const res = await fetch(`/api${chemin}`)
+async function requeteApi<T>(chemin: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`/api${chemin}`, options)
   if (res.status === 401) {
     signalerNonAuthentifie()
     throw new ErreurNonAuthentifie()
   }
   if (!res.ok) {
-    throw new Error(`Erreur ${res.status} : ${res.statusText}`)
+    throw new Error(await messageErreur(res))
   }
   return res.json()
+}
+
+// Message { erreur } renvoyé par le serveur, sinon le statut HTTP
+async function messageErreur(res: Response): Promise<string> {
+  try {
+    const corps: unknown = await res.json()
+    if (typeof corps === 'object' && corps !== null && 'erreur' in corps && typeof corps.erreur === 'string') {
+      return corps.erreur
+    }
+  } catch {
+    // Corps absent ou non JSON
+  }
+  return `Erreur ${res.status} : ${res.statusText}`
+}
+
+// L'identifiant contient un '/' (ex. 'wordfence/wordfence') : il est encodé dans l'URL
+export function mettreAJourPlugin(id: string): Promise<ResultatMiseAJourPlugin> {
+  return requeteApi(`/plugins/${encodeURIComponent(id)}/update`, { method: 'POST' })
 }
 
 export async function chargerPlugins(): Promise<Plugin[]> {

@@ -54,6 +54,155 @@ function whcc_register_routes() {
 			'permission_callback' => 'whcc_can_view_performance',
 		)
 	);
+
+	register_rest_route(
+		'health-checker/v1',
+		'/update-plugin',
+		array(
+			'methods'             => WP_REST_Server::CREATABLE,
+			'callback'            => 'whcc_update_plugin',
+			'permission_callback' => 'whcc_can_update_plugins',
+			'args'                => array(
+				'plugin' => array(
+					'description'       => 'Plugin identifier, same format as /wp/v2/plugins (e.g. "akismet/akismet").',
+					'type'              => 'string',
+					'required'          => true,
+					// Same pattern as /wp/v2/plugins/<plugin>: no dots, so no ".." nor ".php".
+					'pattern'           => '^[^.\/]+(?:\/[^.\/]+)?$',
+					'validate_callback' => 'rest_validate_request_arg',
+				),
+			),
+		)
+	);
+}
+
+function whcc_can_update_plugins() {
+	return current_user_can( 'update_plugins' );
+}
+
+// Updates one plugin like the Plugins screen does, but without any interactive output.
+function whcc_update_plugin( WP_REST_Request $request ) {
+	require_once ABSPATH . 'wp-admin/includes/file.php';
+	require_once ABSPATH . 'wp-admin/includes/misc.php';
+	require_once ABSPATH . 'wp-admin/includes/plugin.php';
+	require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+
+	$plugin = $request['plugin'];
+	$file   = $plugin . '.php';
+
+	$installed = get_plugins();
+	if ( ! isset( $installed[ $file ] ) ) {
+		return new WP_Error(
+			'whcc_plugin_not_installed',
+			sprintf( 'The plugin "%s" is not installed.', $plugin ),
+			array( 'status' => 404 )
+		);
+	}
+
+	$transient = get_site_transient( 'update_plugins' );
+	if ( ! is_object( $transient ) || empty( $transient->response[ $file ] ) || empty( ( (object) $transient->response[ $file ] )->new_version ) ) {
+		return new WP_Error(
+			'whcc_no_update_available',
+			sprintf( 'No update is available for the plugin "%s".', $plugin ),
+			array( 'status' => 409 )
+		);
+	}
+
+	$previous_version = (string) $installed[ $file ]['Version'];
+	$network_wide     = is_multisite() && is_plugin_active_for_network( $file );
+	$was_active       = $network_wide || is_plugin_active( $file );
+
+	$skin     = new WP_Ajax_Upgrader_Skin();
+	$upgrader = new Plugin_Upgrader( $skin );
+
+	// The skin collects messages instead of printing them; this catches any stray output
+	// that would corrupt the JSON response.
+	ob_start();
+	$result = $upgrader->upgrade( $file );
+	ob_end_clean();
+
+	// Outside WP-Cron, Plugin_Upgrader silently deactivates the plugin before installing and
+	// never reactivates it. Reactivate it even if the update failed: WordPress restores the
+	// previous version from its temporary backup in that case.
+	$reactivation_error = whcc_reactivate_plugin( $file, $was_active, $network_wide );
+
+	$errors = whcc_upgrader_errors( $result, $skin );
+	if ( $errors ) {
+		if ( $reactivation_error ) {
+			$errors[] = $reactivation_error;
+		}
+		return new WP_Error(
+			'whcc_update_failed',
+			implode( ' ', $errors ),
+			array( 'status' => 500 )
+		);
+	}
+
+	if ( $reactivation_error ) {
+		return new WP_Error( 'whcc_reactivation_failed', $reactivation_error, array( 'status' => 500 ) );
+	}
+
+	// Read the header from disk: the get_plugins() cache may still hold the old version.
+	$new_data = get_plugin_data( WP_PLUGIN_DIR . '/' . $file, false, false );
+
+	return rest_ensure_response(
+		array(
+			'plugin'           => $plugin,
+			'previous_version' => $previous_version,
+			'new_version'      => (string) $new_data['Version'],
+		)
+	);
+}
+
+// Same checks as wp_ajax_update_plugin(). Returns the error messages, empty on success.
+function whcc_upgrader_errors( $result, WP_Ajax_Upgrader_Skin $skin ) {
+	if ( is_wp_error( $skin->result ) ) {
+		return $skin->result->get_error_messages();
+	}
+
+	if ( $skin->get_errors()->has_errors() ) {
+		return $skin->get_errors()->get_error_messages();
+	}
+
+	if ( is_wp_error( $result ) ) {
+		return $result->get_error_messages();
+	}
+
+	if ( false === $result ) {
+		global $wp_filesystem;
+
+		if ( $wp_filesystem instanceof WP_Filesystem_Base && is_wp_error( $wp_filesystem->errors ) && $wp_filesystem->errors->has_errors() ) {
+			return $wp_filesystem->errors->get_error_messages();
+		}
+		return array( 'Unable to connect to the filesystem.' );
+	}
+
+	return array();
+}
+
+// Returns an error message, or null when there was nothing to do or reactivation worked.
+function whcc_reactivate_plugin( $file, $was_active, $network_wide ) {
+	if ( ! $was_active ) {
+		return null;
+	}
+
+	$active_now = $network_wide ? is_plugin_active_for_network( $file ) : is_plugin_active( $file );
+	if ( $active_now ) {
+		return null;
+	}
+
+	try {
+		// Silent, like the "activate-plugin" step of wp-admin/update.php: no activation hooks.
+		$activated = activate_plugin( $file, '', $network_wide, true );
+	} catch ( Throwable $e ) {
+		$activated = new WP_Error( 'whcc_reactivation_failed', $e->getMessage() );
+	}
+
+	if ( is_wp_error( $activated ) ) {
+		return sprintf( 'The plugin was deactivated during the update and could not be reactivated: %s', $activated->get_error_message() );
+	}
+
+	return null;
 }
 
 function whcc_can_view_performance() {

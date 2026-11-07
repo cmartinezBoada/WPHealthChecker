@@ -2,6 +2,7 @@
 
 // Même forme que Plugin dans src/components/Plugins.tsx (vérifié à la compilation côté frontend)
 export type Plugin = {
+  id: string                        // ex. 'wordfence/wordfence' (format de /wp/v2/plugins)
   name: string
   version: string
   updateAvailable: boolean
@@ -23,6 +24,15 @@ export type SanteSite = {
   recommended: number
   critical: number
   issues: ProblemeSante[]
+}
+
+// Réponse de POST /api/plugins/:id/update
+export type ResultatMiseAJourPlugin = {
+  plugin: string
+  previous_version: string
+  new_version: string
+  site_ok: boolean                  // la page d'accueil répond en 2xx après la mise à jour
+  http_status: number | null        // null si la page d'accueil n'a pas répondu du tout
 }
 
 export type Performance = {
