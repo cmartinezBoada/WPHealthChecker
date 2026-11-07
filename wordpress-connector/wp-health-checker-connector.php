@@ -100,7 +100,18 @@ function whcc_update_plugin( WP_REST_Request $request ) {
 	}
 
 	$transient = get_site_transient( 'update_plugins' );
-	if ( ! is_object( $transient ) || empty( $transient->response[ $file ] ) || empty( ( (object) $transient->response[ $file ] )->new_version ) ) {
+	if ( ! whcc_plugin_updates_are_known( $transient ) ) {
+		whcc_refresh_plugin_updates();
+		$transient = get_site_transient( 'update_plugins' );
+	}
+	if ( ! whcc_plugin_updates_are_known( $transient ) ) {
+		return new WP_Error(
+			'whcc_updates_unknown',
+			'Plugin updates could not be checked: WordPress.org did not answer.',
+			array( 'status' => 503 )
+		);
+	}
+	if ( empty( $transient->response[ $file ] ) || empty( ( (object) $transient->response[ $file ] )->new_version ) ) {
 		return new WP_Error(
 			'whcc_no_update_available',
 			sprintf( 'No update is available for the plugin "%s".', $plugin ),
@@ -108,7 +119,19 @@ function whcc_update_plugin( WP_REST_Request $request ) {
 		);
 	}
 
+	// Diagnostic: premium plugins (e.g. ACF Pro) only get a package URL with a valid license.
+	// Only the host is logged: the full URL may contain a license key.
+	$package = (string) ( ( (object) $transient->response[ $file ] )->package ?? '' );
+	error_log(
+		sprintf(
+			'WP Health Checker Connector: updating %s, package %s',
+			$plugin,
+			'' === $package ? 'EMPTY' : 'present (host: ' . ( wp_parse_url( $package, PHP_URL_HOST ) ?: 'unparsable' ) . ')'
+		)
+	);
+
 	$previous_version = (string) $installed[ $file ]['Version'];
+	$expected_version = (string) ( (object) $transient->response[ $file ] )->new_version;
 	$network_wide     = is_multisite() && is_plugin_active_for_network( $file );
 	$was_active       = $network_wide || is_plugin_active( $file );
 
@@ -127,34 +150,62 @@ function whcc_update_plugin( WP_REST_Request $request ) {
 	$reactivation_error = whcc_reactivate_plugin( $file, $was_active, $network_wide );
 
 	$errors = whcc_upgrader_errors( $result, $skin );
+
+	// The upgrader's verdict is not enough: check what is really on disk now. Clear only the
+	// get_plugins() cache here (not the update transient, which is rebuilt below).
+	wp_clean_plugins_cache( false );
+	$installed_now     = get_plugins();
+	$installed_version = isset( $installed_now[ $file ] ) ? (string) $installed_now[ $file ]['Version'] : null;
+
+	if ( ! $errors && $installed_version !== $expected_version ) {
+		$errors[] = sprintf(
+			'The update did not install the expected version: expected %s, found %s.',
+			$expected_version,
+			null === $installed_version ? 'no plugin file' : $installed_version
+		);
+	}
+
 	if ( $errors ) {
 		if ( $reactivation_error ) {
 			$errors[] = $reactivation_error;
 		}
-		return new WP_Error(
-			'whcc_update_failed',
-			implode( ' ', $errors ),
-			array( 'status' => 500 )
-		);
+		return whcc_update_error( $errors, $skin );
 	}
 
 	if ( $reactivation_error ) {
-		return new WP_Error( 'whcc_reactivation_failed', $reactivation_error, array( 'status' => 500 ) );
+		return whcc_update_error( array( $reactivation_error ), $skin );
 	}
 
-	// Read the header from disk: the get_plugins() cache may still hold the old version.
-	$new_data = get_plugin_data( WP_PLUGIN_DIR . '/' . $file, false, false );
+	// The upgrader deleted the update_plugins transient: rebuild it now so that /updates
+	// still lists the other plugins' updates.
+	whcc_refresh_plugin_updates();
 
 	return rest_ensure_response(
 		array(
 			'plugin'           => $plugin,
 			'previous_version' => $previous_version,
-			'new_version'      => (string) $new_data['Version'],
+			'new_version'      => $installed_version,
 		)
 	);
 }
 
-// Same checks as wp_ajax_update_plugin(). Returns the error messages, empty on success.
+// Failure response, with everything the upgrader skin collected (URLs reduced to their host).
+function whcc_update_error( array $errors, WP_Ajax_Upgrader_Skin $skin ) {
+	$errors = array_map( 'whcc_redact_urls', $errors );
+
+	return new WP_Error(
+		'whcc_update_failed',
+		implode( ' ', $errors ),
+		array(
+			'status'   => 500,
+			'errors'   => $errors,
+			'messages' => array_map( 'whcc_redact_urls', $skin->get_upgrade_messages() ),
+		)
+	);
+}
+
+// Same checks as wp_ajax_update_plugin(), plus: false, null or a WP_Error from the upgrader is
+// always a failure. Returns the error messages, empty only when the upgrader returned true.
 function whcc_upgrader_errors( $result, WP_Ajax_Upgrader_Skin $skin ) {
 	if ( is_wp_error( $skin->result ) ) {
 		return $skin->result->get_error_messages();
@@ -174,10 +225,29 @@ function whcc_upgrader_errors( $result, WP_Ajax_Upgrader_Skin $skin ) {
 		if ( $wp_filesystem instanceof WP_Filesystem_Base && is_wp_error( $wp_filesystem->errors ) && $wp_filesystem->errors->has_errors() ) {
 			return $wp_filesystem->errors->get_error_messages();
 		}
-		return array( 'Unable to connect to the filesystem.' );
+		return array( 'The upgrader failed without giving a reason.' );
+	}
+
+	if ( null === $result ) {
+		return array( 'The upgrader returned no result.' );
 	}
 
 	return array();
+}
+
+// Upgrader messages contain the package URL ("Downloading update from <url>…"), which may hold
+// a license key: keep only the scheme and host, and drop the HTML markup.
+function whcc_redact_urls( $text ) {
+	$text = wp_strip_all_tags( (string) $text );
+
+	return preg_replace_callback(
+		'#\bhttps?://[^\s"\'<>]+#i',
+		function ( $match ) {
+			$parts = wp_parse_url( $match[0] );
+			return empty( $parts['host'] ) ? '[URL]' : ( $parts['scheme'] ?? 'https' ) . '://' . $parts['host'] . '/[…]';
+		},
+		$text
+	);
 }
 
 // Returns an error message, or null when there was nothing to do or reactivation worked.
@@ -406,11 +476,40 @@ function whcc_get_site_health() {
 	return rest_ensure_response( $site_status );
 }
 
+// The transient only reflects a real check once "checked" is filled. wp_update_plugins() first
+// stores a placeholder holding just "last_checked", and leaves it as is if WordPress.org can't be
+// reached: an empty "response" then means "unknown", not "everything is up to date".
+function whcc_plugin_updates_are_known( $transient ) {
+	return is_object( $transient ) && ! empty( $transient->checked ) && is_array( $transient->checked );
+}
+
+// Rebuilds the update_plugins transient (deleted by WordPress after every plugin update).
+function whcc_refresh_plugin_updates() {
+	if ( ! function_exists( 'wp_update_plugins' ) ) {
+		require_once ABSPATH . WPINC . '/update.php';
+	}
+	wp_update_plugins();
+}
+
 function whcc_get_updates() {
 	$transient = get_site_transient( 'update_plugins' );
-	$updates   = array();
 
-	if ( ! is_object( $transient ) || empty( $transient->response ) || ! is_array( $transient->response ) ) {
+	if ( ! whcc_plugin_updates_are_known( $transient ) ) {
+		whcc_refresh_plugin_updates();
+		$transient = get_site_transient( 'update_plugins' );
+	}
+
+	if ( ! whcc_plugin_updates_are_known( $transient ) ) {
+		return new WP_Error(
+			'whcc_updates_unknown',
+			'Plugin updates could not be checked: WordPress.org did not answer.',
+			array( 'status' => 503 )
+		);
+	}
+
+	$updates = array();
+
+	if ( empty( $transient->response ) || ! is_array( $transient->response ) ) {
 		return rest_ensure_response( $updates );
 	}
 

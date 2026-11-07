@@ -26,22 +26,45 @@ async function requeteApi<T>(chemin: string, options?: RequestInit): Promise<T> 
     throw new ErreurNonAuthentifie()
   }
   if (!res.ok) {
-    throw new Error(await messageErreur(res))
+    throw await versErreurApi(res)
   }
   return res.json()
 }
 
+// Erreur renvoyée par le serveur : message { erreur } et, pour une mise à jour échouée,
+// le lien vers la page Extensions de WP Admin
+export class ErreurApi extends Error {
+  readonly lienWpAdmin: string | null
+
+  constructor(message: string, lienWpAdmin: string | null = null) {
+    super(message)
+    this.name = 'ErreurApi'
+    this.lienWpAdmin = lienWpAdmin
+  }
+}
+
+// Le lien finit dans un href : seules les URL http(s) sont acceptées
+function lienHttp(valeur: unknown): string | null {
+  if (typeof valeur !== 'string') return null
+  try {
+    const url = new URL(valeur)
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null
+  } catch {
+    return null
+  }
+}
+
 // Message { erreur } renvoyé par le serveur, sinon le statut HTTP
-async function messageErreur(res: Response): Promise<string> {
+async function versErreurApi(res: Response): Promise<ErreurApi> {
   try {
     const corps: unknown = await res.json()
     if (typeof corps === 'object' && corps !== null && 'erreur' in corps && typeof corps.erreur === 'string') {
-      return corps.erreur
+      return new ErreurApi(corps.erreur, lienHttp('lienWpAdmin' in corps ? corps.lienWpAdmin : null))
     }
   } catch {
     // Corps absent ou non JSON
   }
-  return `Erreur ${res.status} : ${res.statusText}`
+  return new ErreurApi(`Erreur ${res.status} : ${res.statusText}`)
 }
 
 // L'identifiant contient un '/' (ex. 'wordfence/wordfence') : il est encodé dans l'URL

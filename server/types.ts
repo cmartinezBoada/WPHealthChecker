@@ -5,9 +5,14 @@ export type Plugin = {
   id: string                        // ex. 'wordfence/wordfence' (format de /wp/v2/plugins)
   name: string
   version: string
-  updateAvailable: boolean
-  newVersion?: string
+  miseAJour: EtatMiseAJourPlugin
 }
+
+// 'inconnu' : WordPress n'a pas pu vérifier les mises à jour. Ne jamais l'afficher comme « à jour ».
+export type EtatMiseAJourPlugin =
+  | { etat: 'disponible'; nouvelleVersion: string }
+  | { etat: 'a-jour' }
+  | { etat: 'inconnu' }
 
 export type VersionWp = {
   version: string                   // ex. '6.8.1'

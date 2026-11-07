@@ -23,28 +23,46 @@ type WpPluginUpdate = {
 
 const AUTORISATION = `Basic ${Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString('base64')}`
 
-// Erreur renvoyée par WordPress (WP_Error) : status HTTP et message lisible
+// Diagnostic d'une mise à jour échouée : erreurs et messages du skin de l'upgrader
+// (URL déjà réduites à leur hôte par le connecteur)
+export type DetailsUpgrader = { erreurs: string[]; messages: string[] }
+
+// Erreur renvoyée par WordPress (WP_Error) : status HTTP, message lisible et détails éventuels
 export class ErreurWordPress extends Error {
   readonly status: number
+  readonly details: DetailsUpgrader | null
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, details: DetailsUpgrader | null = null) {
     super(message)
     this.name = 'ErreurWordPress'
     this.status = status
+    this.details = details
   }
 }
 
-// Message d'un WP_Error ({ code, message, data }), sinon le statut HTTP
-async function messageErreurWp(res: Response, url: string): Promise<string> {
+function listeDeTextes(valeur: unknown): string[] {
+  return Array.isArray(valeur) ? valeur.filter((v): v is string => typeof v === 'string') : []
+}
+
+// Lit un WP_Error ({ code, message, data }) ; sans corps JSON, message avec le statut HTTP
+async function versErreurWordPress(res: Response, url: string): Promise<ErreurWordPress> {
   try {
     const corps: unknown = await res.json()
     if (typeof corps === 'object' && corps !== null && 'message' in corps && typeof corps.message === 'string') {
-      return corps.message
+      const data = 'data' in corps && typeof corps.data === 'object' && corps.data !== null ? corps.data : {}
+      const details =
+        'errors' in data || 'messages' in data
+          ? {
+              erreurs: listeDeTextes('errors' in data ? data.errors : undefined),
+              messages: listeDeTextes('messages' in data ? data.messages : undefined),
+            }
+          : null
+      return new ErreurWordPress(res.status, corps.message, details)
     }
   } catch {
     // Corps absent ou non JSON
   }
-  return `Erreur ${res.status} : ${res.statusText} (${url})`
+  return new ErreurWordPress(res.status, `Erreur ${res.status} : ${res.statusText} (${url})`)
 }
 
 // Appelle l'API REST de WordPress avec l'authentification Basic.
@@ -68,7 +86,7 @@ async function requeteWp(chemin: string, corps?: unknown): Promise<unknown> {
   }
 
   if (!res.ok) {
-    throw new ErreurWordPress(res.status, await messageErreurWp(res, url))
+    throw await versErreurWordPress(res, url)
   }
   // 204 No Content : WordPress n'envoie pas de corps quand la réponse vaut null
   if (res.status === 204) {
@@ -94,29 +112,44 @@ function estWpPluginUpdate(valeur: unknown): valeur is WpPluginUpdate {
   )
 }
 
-export function versPlugin(wp: WpPlugin, misesAJour: Map<string, string>): Plugin {
-  const newVersion = misesAJour.get(wp.plugin)
+// misesAJour à null : les mises à jour n'ont pas pu être vérifiées
+export function versPlugin(wp: WpPlugin, misesAJour: Map<string, string> | null): Plugin {
+  const nouvelleVersion = misesAJour?.get(wp.plugin)
   return {
     id: wp.plugin,
     name: wp.name,
     version: wp.version,
-    updateAvailable: newVersion !== undefined,
-    newVersion,
+    miseAJour:
+      misesAJour === null ? { etat: 'inconnu' }
+      : nouvelleVersion !== undefined ? { etat: 'disponible', nouvelleVersion }
+      : { etat: 'a-jour' },
   }
 }
 
+// Liste des mises à jour, ou null si elle est inconnue (connecteur en 503, erreur, réponse invalide).
+// Une liste inconnue ne doit jamais devenir une liste vide, qui voudrait dire « tout est à jour ».
+async function chargerMisesAJour(): Promise<Map<string, string> | null> {
+  try {
+    const donnees = await requeteWp('/health-checker/v1/updates')
+    if (!Array.isArray(donnees)) {
+      throw new Error('Réponse inattendue de WordPress')
+    }
+    return new Map(donnees.filter(estWpPluginUpdate).map((u) => [u.plugin, u.new_version]))
+  } catch (e) {
+    console.error('[api] Mises à jour des plugins inconnues :', e instanceof Error ? e.message : e)
+    return null
+  }
+}
+
+// La liste des plugins reste affichée même si les mises à jour n'ont pas pu être vérifiées
 export async function chargerPlugins(): Promise<Plugin[]> {
-  const [donneesPlugins, donneesMisesAJour] = await Promise.all([
+  const [donneesPlugins, misesAJour] = await Promise.all([
     requeteWp('/wp/v2/plugins'),
-    requeteWp('/health-checker/v1/updates'),
+    chargerMisesAJour(),
   ])
-  if (!Array.isArray(donneesPlugins) || !Array.isArray(donneesMisesAJour)) {
+  if (!Array.isArray(donneesPlugins)) {
     throw new Error('Réponse inattendue de WordPress')
   }
-
-  const misesAJour = new Map(
-    donneesMisesAJour.filter(estWpPluginUpdate).map((u) => [u.plugin, u.new_version])
-  )
   return donneesPlugins.filter(estWpPlugin).map((wp) => versPlugin(wp, misesAJour))
 }
 

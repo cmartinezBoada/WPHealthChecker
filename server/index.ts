@@ -41,18 +41,24 @@ app.post('/plugins/:id/update', async (c) => {
   if (!FORMAT_ID_PLUGIN.test(id)) {
     return c.json({ erreur: 'Identifiant de plugin invalide' }, 400)
   }
+  // En cas d'échec, le dashboard propose de faire la mise à jour depuis WP Admin
+  const lienWpAdmin = `${WP_URL}/wp-admin/plugins.php`
   try {
     return c.json(await mettreAJourPlugin(id))
   } catch (e) {
     if (e instanceof ErreurWordPress) {
       console.error(`[api] Mise à jour du plugin ${id} : WordPress ${e.status} : ${e.message}`)
+      if (e.details) {
+        console.error('[api]   erreurs de l\'upgrader :', e.details.erreurs)
+        console.error('[api]   messages de l\'upgrader :', e.details.messages)
+      }
       // 404 (non installé) et 409 (pas de mise à jour) sont transmis tels quels. Jamais de 401 :
       // le frontend le prendrait pour une session expirée.
       const status = e.status === 404 || e.status === 409 ? e.status : 502
-      return c.json({ erreur: e.message }, status)
+      return c.json({ erreur: e.message, lienWpAdmin, ...(e.details && { details: e.details }) }, status)
     }
     console.error(`[api] Mise à jour du plugin ${id} :`, e)
-    return c.json({ erreur: 'Impossible de joindre WordPress' }, 502)
+    return c.json({ erreur: 'Impossible de joindre WordPress', lienWpAdmin }, 502)
   }
 })
 
