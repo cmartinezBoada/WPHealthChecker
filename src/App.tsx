@@ -1,22 +1,37 @@
 import { useEffect, useState } from 'react'
 import logo from './assets/logo.svg'
+import Connexion from './components/Connexion'
 import Header from './components/Header'
 import Plugins, { type Plugin } from './components/Plugins'
 import StatusCard, { type HealthDetail, type HealthItem } from './components/StatusCard'
 import {
   chargerNomProjet,
+  chargerPerformance,
   chargerPlugins,
   chargerSanteSite,
   chargerVersionWp,
+  type Performance,
   type SanteSite,
 } from './lib/wordpress'
+import { seDeconnecter, surNonAuthentifie, verifierSession } from './lib/session'
 
 const APP_NAME = 'WP Health Checker'
 
-// Mocked data until the real WordPress project is wired in
-const ELEMENTS_MOCKES: HealthItem[] = [
-  { name: 'Performance', value: '82/100', status: 'ok' },
-]
+// Temps de réponse du serveur (ms) : ok en dessous du seuil, critique au-dessus du maximum
+const SEUIL_PERFORMANCE_OK_MS = 200
+const SEUIL_PERFORMANCE_CRITIQUE_MS = 600
+
+function versCartePerformance(mesure: Performance | null): HealthItem {
+  if (mesure === null) {
+    return { name: 'Performance', value: 'Pas encore mesuré', status: 'warning' }
+  }
+  const { response_time_ms } = mesure
+  const status: HealthItem['status'] =
+    response_time_ms < SEUIL_PERFORMANCE_OK_MS ? 'ok'
+    : response_time_ms <= SEUIL_PERFORMANCE_CRITIQUE_MS ? 'warning'
+    : 'critical'
+  return { name: 'Performance', value: `${response_time_ms} ms`, status }
+}
 
 function pluriel(nombre: number, mot: string): string {
   return `${nombre} ${mot}${nombre > 1 ? 's' : ''}`
@@ -101,7 +116,8 @@ type EtatPlugins =
   | { etat: 'succes'; plugins: Plugin[] }
   | { etat: 'erreur'; message: string }
 
-function App() {
+// Monté seulement une fois connecté : les données sont rechargées à chaque connexion
+function TableauDeBord({ onDeconnexion }: { onDeconnexion: () => Promise<void> }) {
   const [etatPlugins, setEtatPlugins] = useState<EtatPlugins>({ etat: 'chargement' })
   const [nomProjet, setNomProjet] = useState('Chargement…')
 
@@ -141,7 +157,19 @@ function App() {
       })
   }, [])
 
-  const elements: HealthItem[] = [versionWp, santeSite, ...ELEMENTS_MOCKES].filter(
+  // Pas de carte tant que la performance n'est pas mesurée
+  const [performance, setPerformance] = useState<HealthItem>()
+
+  useEffect(() => {
+    chargerPerformance()
+      .then((mesure) => setPerformance(versCartePerformance(mesure)))
+      .catch((e: unknown) => {
+        console.error('[App] Performance indisponible :', e)
+        setPerformance({ name: 'Performance', value: 'Pas disponible pour le moment', status: 'warning' })
+      })
+  }, [])
+
+  const elements: HealthItem[] = [versionWp, santeSite, performance].filter(
     (element) => element !== undefined
   )
 
@@ -163,6 +191,7 @@ function App() {
         projectName={nomProjet}
         logoSrc={logo}
         logoAlt="WP Health Checker logo"
+        onDeconnexion={onDeconnexion}
       />
       <main className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-6">
         <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -183,6 +212,62 @@ function App() {
       </main>
     </div>
   )
+}
+
+type EtatSession =
+  | { etat: 'verification' }
+  | { etat: 'deconnecte' }
+  | { etat: 'connecte'; utilisateur: string }
+
+function App() {
+  const [session, setSession] = useState<EtatSession>({ etat: 'verification' })
+
+  useEffect(() => {
+    let annule = false
+    verifierSession()
+      .then((utilisateur) => {
+        if (annule) return
+        setSession(utilisateur ? { etat: 'connecte', utilisateur } : { etat: 'deconnecte' })
+      })
+      .catch((e: unknown) => {
+        console.error('[App] Vérification de la session impossible :', e)
+        if (!annule) setSession({ etat: 'deconnecte' })
+      })
+    return () => {
+      annule = true
+    }
+  }, [])
+
+  // N'importe quel appel /api/... qui répond 401 (session expirée) ramène au formulaire
+  useEffect(() => surNonAuthentifie(() => setSession({ etat: 'deconnecte' })), [])
+
+  const deconnecter = async () => {
+    try {
+      await seDeconnecter()
+    } catch (e: unknown) {
+      console.error('[App] Déconnexion impossible :', e)
+    }
+    setSession({ etat: 'deconnecte' })
+  }
+
+  switch (session.etat) {
+    case 'verification':
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-slate-50">
+          <p className="text-sm text-slate-500">Vérification de la session…</p>
+        </div>
+      )
+    case 'deconnecte':
+      return (
+        <Connexion
+          appName={APP_NAME}
+          logoSrc={logo}
+          onConnexion={(utilisateur) => setSession({ etat: 'connecte', utilisateur })}
+        />
+      )
+    case 'connecte':
+      return <TableauDeBord onDeconnexion={deconnecter} />
+  }
 }
 
 export default App

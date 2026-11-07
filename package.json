@@ -3,13 +3,22 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.19"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:all": "concurrently -n web,api -c blue,magenta \"npm:dev\" \"npm:dev:server\"",
+    "hash-password": "tsx server/hash-password.ts",
+    "build":"tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.6",
+    "bcryptjs": "^3.0.3",
+    "hono": "^4.13.16",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
@@ -19,8 +28,10 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.6",
     "oxlint": "^1.81.0",
     "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
   }

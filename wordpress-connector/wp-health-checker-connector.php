@@ -44,6 +44,115 @@ function whcc_register_routes() {
 			'permission_callback' => 'whcc_can_view_site_health',
 		)
 	);
+
+	register_rest_route(
+		'health-checker/v1',
+		'/performance',
+		array(
+			'methods'             => WP_REST_Server::READABLE,
+			'callback'            => 'whcc_get_performance',
+			'permission_callback' => 'whcc_can_view_performance',
+		)
+	);
+}
+
+function whcc_can_view_performance() {
+	return current_user_can( 'manage_options' );
+}
+
+define( 'WHCC_PERFORMANCE_OPTION', 'whcc_performance' );
+define( 'WHCC_PERFORMANCE_CRON_HOOK', 'whcc_measure_performance' );
+define( 'WHCC_PERFORMANCE_SAMPLES', 3 );
+
+// The measurement runs in WP-Cron, never during a REST request: with few PHP workers
+// (2 on Local), loopback requests made while the dashboard loads wait for a free worker
+// and time out.
+add_action( WHCC_PERFORMANCE_CRON_HOOK, 'whcc_run_performance_measurement' );
+
+register_activation_hook( __FILE__, 'whcc_schedule_performance_measurement' );
+register_deactivation_hook( __FILE__, 'whcc_unschedule_performance_measurement' );
+
+// The plugin may already be active (activation hook never ran), so reschedule if missing.
+add_action( 'init', 'whcc_schedule_performance_measurement' );
+
+function whcc_schedule_performance_measurement() {
+	if ( ! wp_next_scheduled( WHCC_PERFORMANCE_CRON_HOOK ) ) {
+		// First run on the next cron spawn, then hourly.
+		wp_schedule_event( time(), 'hourly', WHCC_PERFORMANCE_CRON_HOOK );
+	}
+}
+
+function whcc_unschedule_performance_measurement() {
+	wp_clear_scheduled_hook( WHCC_PERFORMANCE_CRON_HOOK );
+}
+
+// On failure, the previous result is kept and the error is logged.
+function whcc_run_performance_measurement() {
+	$result = whcc_measure_performance();
+
+	if ( is_wp_error( $result ) ) {
+		error_log( 'WP Health Checker Connector: ' . $result->get_error_message() );
+		return;
+	}
+
+	update_option( WHCC_PERFORMANCE_OPTION, $result, false );
+}
+
+// Only reads the stored result: null until the first measurement has run.
+// The REST server sends no body for null data, so make it an explicit 204 No Content.
+function whcc_get_performance() {
+	$stored = get_option( WHCC_PERFORMANCE_OPTION, null );
+
+	if ( ! is_array( $stored ) ) {
+		return new WP_REST_Response( null, 204 );
+	}
+
+	return rest_ensure_response( $stored );
+}
+
+// Median server response time of the home page, measured with loopback requests.
+function whcc_measure_performance() {
+	$url  = home_url( '/' );
+	$args = array(
+		'timeout'   => 10,
+		// Same filter as core loopback requests (WP_Site_Health::can_perform_loopback()),
+		// so self-signed local certificates are accepted.
+		'sslverify' => apply_filters( 'https_local_ssl_verify', false ),
+	);
+
+	$durations = array();
+
+	for ( $i = 0; $i < WHCC_PERFORMANCE_SAMPLES; $i++ ) {
+		$start    = microtime( true );
+		$response = wp_remote_get( $url, $args );
+		$elapsed  = ( microtime( true ) - $start ) * 1000;
+
+		if ( is_wp_error( $response ) ) {
+			return new WP_Error(
+				'whcc_performance_request_failed',
+				sprintf( 'The request to the home page (%s) failed: %s', $url, $response->get_error_message() ),
+				array( 'status' => 502 )
+			);
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		if ( 200 !== $code ) {
+			return new WP_Error(
+				'whcc_performance_bad_status',
+				sprintf( 'The home page (%s) returned HTTP %d instead of 200.', $url, $code ),
+				array( 'status' => 502 )
+			);
+		}
+
+		$durations[] = $elapsed;
+	}
+
+	sort( $durations );
+
+	return array(
+		'response_time_ms' => (int) round( $durations[ intdiv( count( $durations ), 2 ) ] ),
+		'measured_at'      => time(),
+	);
 }
 
 function whcc_can_view_updates() {
