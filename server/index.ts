@@ -1,5 +1,5 @@
 import { serve } from '@hono/node-server'
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { connexion, deconnexion, exigerSession, moi } from './auth.ts'
 import { PORT, WP_URL } from './config.ts'
 import {
@@ -12,6 +12,7 @@ import {
   ErreurWordPress,
   FORMAT_ID_PLUGIN,
   mettreAJourPlugin,
+  mettreAJourWordPress,
 } from './wordpress.ts'
 
 const app = new Hono().basePath('/api')
@@ -35,6 +36,23 @@ function route<T>(chemin: string, charger: () => Promise<T>) {
   })
 }
 
+// Réponse d'une mise à jour échouée, avec le lien WP Admin proposé par le dashboard.
+// 404 (introuvable) et 409 (rien à mettre à jour, serveur incompatible) sont transmis tels quels.
+// Jamais de 401 : le frontend le prendrait pour une session expirée.
+function reponseEchecMiseAJour(c: Context, libelle: string, e: unknown, lienWpAdmin: string) {
+  if (e instanceof ErreurWordPress) {
+    console.error(`[api] ${libelle} : WordPress ${e.status} : ${e.message}`)
+    if (e.details) {
+      console.error('[api]   erreurs de l\'upgrader :', e.details.erreurs)
+      console.error('[api]   messages de l\'upgrader :', e.details.messages)
+    }
+    const status = e.status === 404 || e.status === 409 ? e.status : 502
+    return c.json({ erreur: e.message, lienWpAdmin, ...(e.details && { details: e.details }) }, status)
+  }
+  console.error(`[api] ${libelle} :`, e)
+  return c.json({ erreur: e instanceof Error ? e.message : 'Impossible de joindre WordPress', lienWpAdmin }, 502)
+}
+
 // Protégée par exigerSession comme toutes les routes hors /login et /me
 app.post('/plugins/:id/update', async (c) => {
   // L'identifiant contient un '/' : le client l'encode (wordfence%2Fwordfence), Hono le décode
@@ -42,24 +60,19 @@ app.post('/plugins/:id/update', async (c) => {
   if (!FORMAT_ID_PLUGIN.test(id)) {
     return c.json({ erreur: 'Identifiant de plugin invalide' }, 400)
   }
-  // En cas d'échec, le dashboard propose de faire la mise à jour depuis WP Admin
-  const lienWpAdmin = `${WP_URL}/wp-admin/plugins.php`
   try {
     return c.json(await mettreAJourPlugin(id))
   } catch (e) {
-    if (e instanceof ErreurWordPress) {
-      console.error(`[api] Mise à jour du plugin ${id} : WordPress ${e.status} : ${e.message}`)
-      if (e.details) {
-        console.error('[api]   erreurs de l\'upgrader :', e.details.erreurs)
-        console.error('[api]   messages de l\'upgrader :', e.details.messages)
-      }
-      // 404 (non installé) et 409 (pas de mise à jour) sont transmis tels quels. Jamais de 401 :
-      // le frontend le prendrait pour une session expirée.
-      const status = e.status === 404 || e.status === 409 ? e.status : 502
-      return c.json({ erreur: e.message, lienWpAdmin, ...(e.details && { details: e.details }) }, status)
-    }
-    console.error(`[api] Mise à jour du plugin ${id} :`, e)
-    return c.json({ erreur: 'Impossible de joindre WordPress', lienWpAdmin }, 502)
+    return reponseEchecMiseAJour(c, `Mise à jour du plugin ${id}`, e, `${WP_URL}/wp-admin/plugins.php`)
+  }
+})
+
+// Protégée par exigerSession. Peut durer plusieurs minutes (délai de 5 minutes côté connecteur)
+app.post('/wordpress/update', async (c) => {
+  try {
+    return c.json(await mettreAJourWordPress())
+  } catch (e) {
+    return reponseEchecMiseAJour(c, 'Mise à jour de WordPress', e, `${WP_URL}/wp-admin/update-core.php`)
   }
 })
 

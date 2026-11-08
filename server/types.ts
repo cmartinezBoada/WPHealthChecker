@@ -17,6 +17,17 @@ export type EtatMiseAJourPlugin =
 export type VersionWp = {
   version: string                   // ex. '6.8.1'
   latest: string | null             // ex. '6.8.2', null si à jour
+  // 'minor' : même branche (7.1.3 → 7.1.4) ; 'major' : nouvelle branche (7.1 → 7.2). null si à jour
+  update_type: 'minor' | 'major' | null
+}
+
+// Réponse de POST /api/wordpress/update
+export type ResultatMiseAJourWordPress = {
+  previous_version: string
+  new_version: string
+  site_ok: boolean                  // page d'accueil et /wp-json/ répondent toutes deux en HTTP 200
+  accueil_http_status: number | null // null si pas de réponse
+  api_http_status: number | null
 }
 
 export type ProblemeSante = {

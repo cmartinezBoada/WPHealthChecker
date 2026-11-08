@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react'
+
 export type Status = 'ok' | 'warning' | 'critical' | 'warning'
 
 export type HealthDetail = {
@@ -18,18 +20,24 @@ const STATUS_STYLES: Record<Status, { label: string; badge: string; dot: string 
   critical: { label: 'Critical', badge: 'bg-red-50 text-red-700', dot: 'bg-red-500' },
 }
 
-function StatusCard({ name, value, status, details = [] }: HealthItem) {
+type StatusCardProps = HealthItem & {
+  // Contenu supplémentaire sous la valeur, ex. un bouton d'action
+  children?: ReactNode
+}
+
+function StatusCard({ name, value, status, details = [], children }: StatusCardProps) {
   const { label, badge, dot } = STATUS_STYLES[status]
 
   return (
     <div
       className={`flex justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm ${
-        details.length > 0 ? 'items-start' : 'items-center'
+        details.length > 0 || children ? 'items-start' : 'items-center'
       }`}
     >
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <h3 className="truncate font-semibold text-slate-900">{name}</h3>
         <p className="text-sm text-slate-500">{value}</p>
+        {children}
         {details.length > 0 && (
           <ul className="mt-2 flex flex-col gap-1">
             {details.map((detail) => (

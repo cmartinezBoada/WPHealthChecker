@@ -29,6 +29,9 @@ type PluginsProps = {
   onRecharger: () => Promise<void>
   // Affichée dans la confirmation de mise à jour
   sauvegarde: ChargementSauvegarde
+  // Une mise à jour de WordPress est en cours : pas de mise à jour de plugin en parallèle
+  bloque: boolean
+  onOccupation: (enCours: boolean) => void
 }
 
 // Message affiché sous la ligne d'un plugin après une tentative de mise à jour
@@ -43,7 +46,7 @@ function texteErreur(e: unknown): string {
   return e instanceof Error ? e.message : 'Erreur inconnue'
 }
 
-function Plugins({ plugins, onRecharger, sauvegarde }: PluginsProps) {
+function Plugins({ plugins, onRecharger, sauvegarde, bloque, onOccupation }: PluginsProps) {
   // Une seule mise à jour à la fois : WordPress ne gère pas bien deux mises à jour simultanées
   const [idEnCours, setIdEnCours] = useState<string | null>(null)
   const [messages, setMessages] = useState<Record<string, MessagePlugin>>({})
@@ -59,6 +62,7 @@ function Plugins({ plugins, onRecharger, sauvegarde }: PluginsProps) {
   // Lancée seulement après confirmation dans ConfirmationMiseAJour
   const mettreAJour = async (plugin: Plugin) => {
     setIdEnCours(plugin.id)
+    onOccupation(true)
     definirMessage(plugin.id, null)
     try {
       const resultat = await mettreAJourPlugin(plugin.id)
@@ -90,6 +94,7 @@ function Plugins({ plugins, onRecharger, sauvegarde }: PluginsProps) {
       })
     } finally {
       setIdEnCours(null)
+      onOccupation(false)
     }
   }
 
@@ -99,7 +104,7 @@ function Plugins({ plugins, onRecharger, sauvegarde }: PluginsProps) {
 
       {demande && (
         <ConfirmationMiseAJour
-          nomPlugin={demande.plugin.name}
+          titre={`Mettre à jour « ${demande.plugin.name} » ?`}
           versionActuelle={demande.plugin.version}
           nouvelleVersion={demande.nouvelleVersion}
           sauvegarde={sauvegarde}
@@ -181,7 +186,8 @@ function Plugins({ plugins, onRecharger, sauvegarde }: PluginsProps) {
                   <button
                     type="button"
                     onClick={() => setDemande({ plugin, nouvelleVersion: miseAJour.nouvelleVersion })}
-                    disabled={idEnCours !== null}
+                    disabled={idEnCours !== null || bloque}
+                    title={bloque ? 'Une mise à jour de WordPress est en cours' : undefined}
                     className={`rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium whitespace-nowrap text-white hover:bg-slate-700 disabled:opacity-50 ${
                       enCours ? 'disabled:cursor-wait' : 'disabled:cursor-not-allowed'
                     }`}

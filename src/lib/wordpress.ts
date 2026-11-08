@@ -4,6 +4,7 @@ import type {
   Plugin as PluginApi,
   Performance,
   ResultatMiseAJourPlugin,
+  ResultatMiseAJourWordPress,
   SanteSite,
   VersionWp,
 } from '../../server/types.ts'
@@ -14,6 +15,7 @@ export type {
   Performance,
   ProblemeSante,
   ResultatMiseAJourPlugin,
+  ResultatMiseAJourWordPress,
   SanteSite,
   VersionWp,
 } from '../../server/types.ts'
@@ -91,6 +93,11 @@ export function chargerVersionWp(): Promise<VersionWp> {
 // null si Santé du site n'a jamais été analysé
 export function chargerSanteSite(): Promise<SanteSite | null> {
   return requeteApi('/sante-site')
+}
+
+// Peut durer plusieurs minutes : le serveur attend jusqu'à 5 minutes la fin de la mise à jour
+export function mettreAJourWordPress(): Promise<ResultatMiseAJourWordPress> {
+  return requeteApi('/wordpress/update', { method: 'POST' })
 }
 
 export function chargerDerniereSauvegarde(): Promise<DerniereSauvegarde> {

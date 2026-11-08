@@ -57,6 +57,16 @@ function whcc_register_routes() {
 
 	register_rest_route(
 		'health-checker/v1',
+		'/update-core',
+		array(
+			'methods'             => WP_REST_Server::CREATABLE,
+			'callback'            => 'whcc_update_core',
+			'permission_callback' => 'whcc_can_update_core',
+		)
+	);
+
+	register_rest_route(
+		'health-checker/v1',
 		'/backups',
 		array(
 			'methods'             => WP_REST_Server::READABLE,
@@ -144,6 +154,156 @@ function whcc_get_backups() {
 		array(
 			'state'      => 'found',
 			'created_at' => $date->format( 'Y-m-d\TH:i:s\Z' ),
+		)
+	);
+}
+
+function whcc_can_update_core() {
+	return current_user_can( 'update_core' );
+}
+
+// Reads wp-includes/version.php from disk in an isolated scope: after an update, the globals
+// of the running request still hold the previous version.
+function whcc_read_core_version_file() {
+	$read = function ( $file ) {
+		$wp_version    = null;
+		$wp_db_version = null;
+		include $file;
+		return array(
+			'wp_version'    => (string) $wp_version,
+			'wp_db_version' => (int) $wp_db_version,
+		);
+	};
+
+	if ( function_exists( 'wp_opcache_invalidate' ) ) {
+		wp_opcache_invalidate( ABSPATH . WPINC . '/version.php', true );
+	}
+	return $read( ABSPATH . WPINC . '/version.php' );
+}
+
+// db_version straight from the database, bypassing the options cache that may be stale.
+function whcc_read_db_version() {
+	global $wpdb;
+	return (int) $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'db_version' ) );
+}
+
+// Updates WordPress core like wp-admin/update-core.php, without any interactive output, then
+// checks the result on disk and in the database instead of trusting the upgrader.
+function whcc_update_core() {
+	global $wp_version, $wpdb;
+
+	require_once ABSPATH . 'wp-admin/includes/file.php';
+	require_once ABSPATH . 'wp-admin/includes/misc.php';
+	require_once ABSPATH . 'wp-admin/includes/update.php';
+	require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+
+	$transient = whcc_core_updates_transient();
+	if ( null === $transient ) {
+		return new WP_Error(
+			'whcc_core_updates_unknown',
+			'WordPress updates could not be checked: WordPress.org did not answer.',
+			array( 'status' => 503 )
+		);
+	}
+
+	$offer = whcc_find_core_offer( $transient );
+	if ( null === $offer || ! version_compare( $offer->current, $wp_version, '>' ) ) {
+		return new WP_Error( 'whcc_no_core_update', 'No WordPress update is available.', array( 'status' => 409 ) );
+	}
+
+	// Refuse before downloading anything. Same rules as update_core(), which only checks
+	// after the download: MySQL is not checked behind a db.php drop-in that isn't MySQL.
+	$php_version   = PHP_VERSION;
+	$mysql_version = $wpdb->db_version();
+	if ( ! empty( $offer->php_version ) && version_compare( $php_version, $offer->php_version, '<' ) ) {
+		return new WP_Error(
+			'whcc_php_too_old',
+			sprintf( 'WordPress %1$s requires PHP %2$s or higher; this server runs PHP %3$s.', $offer->current, $offer->php_version, $php_version ),
+			array( 'status' => 409 )
+		);
+	}
+	$mysql_checked = ! ( file_exists( WP_CONTENT_DIR . '/db.php' ) && empty( $wpdb->is_mysql ) );
+	if ( $mysql_checked && ! empty( $offer->mysql_version ) && version_compare( $mysql_version, $offer->mysql_version, '<' ) ) {
+		return new WP_Error(
+			'whcc_mysql_too_old',
+			sprintf( 'WordPress %1$s requires MySQL %2$s or higher; this server runs MySQL %3$s.', $offer->current, $offer->mysql_version, $mysql_version ),
+			array( 'status' => 409 )
+		);
+	}
+
+	$previous_version = (string) $wp_version;
+	$expected_version = (string) $offer->current;
+
+	$skin     = new WP_Ajax_Upgrader_Skin();
+	$upgrader = new Core_Upgrader( $skin );
+
+	ob_start();
+	$result = $upgrader->upgrade(
+		$offer,
+		array(
+			// Same as do_core_upgrade().
+			'allow_relaxed_file_ownership' => isset( $offer->new_files ) && ! $offer->new_files,
+		)
+	);
+	ob_end_clean();
+
+	// Core_Upgrader returns the new version string on success: false, null or a WP_Error
+	// (and any error collected by the skin) is a failure.
+	$errors = whcc_upgrader_errors( $result, $skin );
+	if ( $errors ) {
+		return whcc_update_error( $errors, $skin );
+	}
+
+	// 1. The files on disk are the expected version.
+	$on_disk = whcc_read_core_version_file();
+	if ( $on_disk['wp_version'] !== $expected_version ) {
+		return whcc_update_error(
+			array( sprintf( 'The update did not install the expected version: expected %s, found %s.', $expected_version, $on_disk['wp_version'] ) ),
+			$skin
+		);
+	}
+
+	// 2. The database upgrade has run. update_core() starts it with a loopback request that can
+	// fail (e.g. self-signed certificate on a local site). It is retried the same way: in a fresh
+	// PHP process loading the new code, not in this request, which still holds the old code.
+	if ( whcc_read_db_version() < $on_disk['wp_db_version'] ) {
+		wp_remote_post(
+			admin_url( 'upgrade.php?step=upgrade_db' ),
+			array(
+				'timeout'   => 60,
+				'sslverify' => apply_filters( 'https_local_ssl_verify', false ),
+			)
+		);
+		wp_cache_delete( 'alloptions', 'options' );
+		wp_cache_delete( 'db_version', 'options' );
+	}
+	$db_version = whcc_read_db_version();
+	if ( $db_version < $on_disk['wp_db_version'] ) {
+		return whcc_update_error(
+			array(
+				sprintf(
+					'WordPress %1$s is installed but its database upgrade has not run (db_version %2$d, expected %3$d). Open WP Admin to run it.',
+					$expected_version,
+					$db_version,
+					$on_disk['wp_db_version']
+				),
+			),
+			$skin
+		);
+	}
+
+	// 3. The site is not left in maintenance mode.
+	if ( file_exists( ABSPATH . '.maintenance' ) ) {
+		return whcc_update_error(
+			array( 'A .maintenance file is still present at the site root: the site shows a maintenance message.' ),
+			$skin
+		);
+	}
+
+	return rest_ensure_response(
+		array(
+			'previous_version' => $previous_version,
+			'new_version'      => $on_disk['wp_version'],
 		)
 	);
 }
@@ -454,29 +614,76 @@ function whcc_can_view_version() {
 	return current_user_can( 'update_core' );
 }
 
-function whcc_get_version() {
-	global $wp_version;
-
-	$latest    = null;
+// The update_core transient, rebuilt with wp_version_check() when missing (WordPress deletes
+// it after a core update). Returns null if it still can't be read.
+function whcc_core_updates_transient() {
 	$transient = get_site_transient( 'update_core' );
 
-	if ( is_object( $transient ) && ! empty( $transient->updates ) && is_array( $transient->updates ) ) {
-		foreach ( $transient->updates as $offer ) {
-			$offer = (object) $offer;
+	if ( ! is_object( $transient ) || ! isset( $transient->updates ) || ! is_array( $transient->updates ) ) {
+		if ( ! function_exists( 'wp_version_check' ) ) {
+			require_once ABSPATH . WPINC . '/update.php';
+		}
+		wp_version_check();
+		$transient = get_site_transient( 'update_core' );
+	}
 
-			if ( isset( $offer->response, $offer->version )
-				&& 'upgrade' === $offer->response
-				&& version_compare( $offer->version, $wp_version, '>' ) ) {
-				$latest = (string) $offer->version;
-				break;
-			}
+	if ( ! is_object( $transient ) || ! isset( $transient->updates ) || ! is_array( $transient->updates ) ) {
+		return null;
+	}
+	return $transient;
+}
+
+// The "upgrade" offer for the site's locale, or for en_US only if none matches the locale.
+// Returns null when no update is offered.
+function whcc_find_core_offer( $transient ) {
+	$fallback = null;
+
+	foreach ( $transient->updates as $offer ) {
+		$offer = (object) $offer;
+
+		if ( ! isset( $offer->response, $offer->locale, $offer->current ) || 'upgrade' !== $offer->response ) {
+			continue;
+		}
+		if ( get_locale() === $offer->locale ) {
+			return $offer;
+		}
+		if ( 'en_US' === $offer->locale && null === $fallback ) {
+			$fallback = $offer;
 		}
 	}
 
+	return $fallback;
+}
+
+// WordPress versioning: a change of the first two numbers (6.9 → 7.0, 7.1 → 7.2) is a major
+// release; only the third one (7.1.3 → 7.1.4) is a minor, maintenance and security release.
+function whcc_core_update_type( $from, $to ) {
+	$branch = function ( $version ) {
+		return implode( '.', array_slice( explode( '.', (string) $version ), 0, 2 ) );
+	};
+	return $branch( $from ) === $branch( $to ) ? 'minor' : 'major';
+}
+
+function whcc_get_version() {
+	global $wp_version;
+
+	$transient = whcc_core_updates_transient();
+	if ( null === $transient ) {
+		return new WP_Error(
+			'whcc_core_updates_unknown',
+			'WordPress updates could not be checked: WordPress.org did not answer.',
+			array( 'status' => 503 )
+		);
+	}
+
+	$offer  = whcc_find_core_offer( $transient );
+	$latest = null !== $offer && version_compare( $offer->current, $wp_version, '>' ) ? (string) $offer->current : null;
+
 	return rest_ensure_response(
 		array(
-			'version' => (string) $wp_version,
-			'latest'  => $latest,
+			'version'     => (string) $wp_version,
+			'latest'      => $latest,
+			'update_type' => null === $latest ? null : whcc_core_update_type( $wp_version, $latest ),
 		)
 	);
 }

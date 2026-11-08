@@ -2,9 +2,12 @@ import { useEffect, useId, useRef } from 'react'
 import { decrireSauvegarde, SEUIL_SAUVEGARDE_OK_JOURS, type ChargementSauvegarde } from '../lib/sauvegardes'
 
 type ConfirmationMiseAJourProps = {
-  nomPlugin: string
+  titre: string                     // ex. 'Mettre à jour « Akismet » ?'
   versionActuelle: string
   nouvelleVersion: string
+  // Ligne supplémentaire, ex. le type de mise à jour de WordPress ; important : mise en avant
+  precision?: { texte: string; important: boolean }
+  libelleConfirmer?: string
   sauvegarde: ChargementSauvegarde
   onConfirmer: () => void
   onAnnuler: () => void
@@ -35,9 +38,11 @@ function ligneSauvegarde(sauvegarde: ChargementSauvegarde): LigneSauvegarde {
 // Monté seulement pendant la demande : le dialogue s'ouvre en modal dès l'affichage.
 // Échap ou « Annuler » ferment le dialogue, ce qui déclenche onAnnuler.
 function ConfirmationMiseAJour({
-  nomPlugin,
+  titre,
   versionActuelle,
   nouvelleVersion,
+  precision,
+  libelleConfirmer = 'Mettre à jour',
   sauvegarde,
   onConfirmer,
   onAnnuler,
@@ -58,11 +63,18 @@ function ConfirmationMiseAJour({
       className="m-auto w-[calc(100%-2rem)] max-w-md rounded-xl bg-white p-6 text-slate-900 shadow-xl backdrop:bg-slate-900/40"
     >
       <h2 id={idTitre} className="text-lg font-semibold">
-        Mettre à jour « {nomPlugin} » ?
+        {titre}
       </h2>
       <p className="mt-2 text-sm text-slate-700">
         Version {versionActuelle} → {nouvelleVersion}
       </p>
+      {precision && (
+        <p
+          className={`mt-1 text-sm ${precision.important ? 'font-medium text-amber-800' : 'text-slate-600'}`}
+        >
+          {precision.texte}
+        </p>
+      )}
 
       <div
         className={`mt-4 rounded-lg p-3 text-sm ${
@@ -92,7 +104,7 @@ function ConfirmationMiseAJour({
           onClick={onConfirmer}
           className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
         >
-          Mettre à jour
+          {libelleConfirmer}
         </button>
       </div>
     </dialog>

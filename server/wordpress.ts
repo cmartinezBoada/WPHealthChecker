@@ -5,6 +5,7 @@ import type {
   Plugin,
   ProblemeSante,
   ResultatMiseAJourPlugin,
+  ResultatMiseAJourWordPress,
   SanteSite,
   VersionWp,
 } from './types.ts'
@@ -67,8 +68,8 @@ async function versErreurWordPress(res: Response, url: string): Promise<ErreurWo
 }
 
 // Appelle l'API REST de WordPress avec l'authentification Basic.
-// Avec un corps, la requête est un POST JSON.
-async function requeteWp(chemin: string, corps?: unknown): Promise<unknown> {
+// Avec un corps, la requête est un POST JSON. delaiMs limite la durée totale de la requête.
+async function requeteWp(chemin: string, corps?: unknown, delaiMs?: number): Promise<unknown> {
   const url = `${WP_URL}/wp-json${chemin}`
   const options: RequestInit =
     corps === undefined
@@ -78,11 +79,20 @@ async function requeteWp(chemin: string, corps?: unknown): Promise<unknown> {
           headers: { Authorization: AUTORISATION, 'Content-Type': 'application/json' },
           body: JSON.stringify(corps),
         }
+  if (delaiMs !== undefined) {
+    options.signal = AbortSignal.timeout(delaiMs)
+  }
 
   let res: Response
   try {
     res = await fetch(url, options)
   } catch (e) {
+    if (e instanceof Error && e.name === 'TimeoutError') {
+      throw new Error(
+        `WordPress n'a pas répondu en ${Math.round((delaiMs ?? 0) / 60_000)} minutes (${url}) : la mise à jour continue peut-être, vérifiez dans WP Admin`,
+        { cause: e }
+      )
+    }
     throw new Error(`WordPress injoignable (${url})`, { cause: e })
   }
 
@@ -159,19 +169,53 @@ export const FORMAT_ID_PLUGIN = /^[^./]+(?:\/[^./]+)?$/
 
 const DELAI_VERIFICATION_SITE_MS = 15_000
 
-// Vérifie depuis Node que la page d'accueil répond toujours après la mise à jour
-async function verifierPageAccueil(): Promise<{ site_ok: boolean; http_status: number | null }> {
+// Statut HTTP d'une page du site après une mise à jour, null si elle ne répond pas.
+// Paramètre unique : un cache de page ne doit pas servir l'ancienne version du site.
+async function statutHttpApresMiseAJour(chemin: string): Promise<number | null> {
+  const separateur = chemin.includes('?') ? '&' : '?'
   try {
-    // Paramètre unique : un cache de page ne doit pas servir l'ancienne version du site
-    const res = await fetch(`${WP_URL}/?whc_verification=${Date.now()}`, {
+    const res = await fetch(`${WP_URL}${chemin}${separateur}whc_verification=${Date.now()}`, {
       redirect: 'follow',
       signal: AbortSignal.timeout(DELAI_VERIFICATION_SITE_MS),
     })
     await res.body?.cancel()
-    return { site_ok: res.ok, http_status: res.status }
+    return res.status
   } catch (e) {
-    console.error('[api] Page d\'accueil injoignable après la mise à jour :', e)
-    return { site_ok: false, http_status: null }
+    console.error(`[api] ${chemin} injoignable après la mise à jour :`, e)
+    return null
+  }
+}
+
+// Vérifie depuis Node que la page d'accueil répond toujours après la mise à jour
+async function verifierPageAccueil(): Promise<{ site_ok: boolean; http_status: number | null }> {
+  const http_status = await statutHttpApresMiseAJour('/')
+  return { site_ok: http_status !== null && http_status >= 200 && http_status < 300, http_status }
+}
+
+// Une mise à jour de WordPress télécharge et remplace tout le cœur : elle peut être longue
+const DELAI_MISE_A_JOUR_WORDPRESS_MS = 5 * 60_000
+
+// Met à jour WordPress via le connecteur, puis vérifie que la page d'accueil et l'API REST
+// répondent toutes deux en HTTP 200
+export async function mettreAJourWordPress(): Promise<ResultatMiseAJourWordPress> {
+  const donnees = await requeteWp('/health-checker/v1/update-core', {}, DELAI_MISE_A_JOUR_WORDPRESS_MS)
+  if (
+    typeof donnees !== 'object' || donnees === null ||
+    !('previous_version' in donnees) || typeof donnees.previous_version !== 'string' ||
+    !('new_version' in donnees) || typeof donnees.new_version !== 'string'
+  ) {
+    throw new Error('Réponse inattendue de WordPress')
+  }
+  const [accueil_http_status, api_http_status] = await Promise.all([
+    statutHttpApresMiseAJour('/'),
+    statutHttpApresMiseAJour('/wp-json/'),
+  ])
+  return {
+    previous_version: donnees.previous_version,
+    new_version: donnees.new_version,
+    site_ok: accueil_http_status === 200 && api_http_status === 200,
+    accueil_http_status,
+    api_http_status,
   }
 }
 
@@ -203,7 +247,8 @@ export async function chargerNomProjet(): Promise<string> {
   return donnees.name
 }
 
-// Réponse du plugin WP Health Checker Connector : { version: '6.8.1', latest: '6.8.2' | null }
+// Réponse du plugin WP Health Checker Connector :
+// { version: '6.8.1', latest: '6.8.2' | null, update_type: 'minor' | 'major' | null }
 export async function chargerVersionWp(): Promise<VersionWp> {
   const donnees = await requeteWp('/health-checker/v1/version')
   if (
@@ -213,7 +258,10 @@ export async function chargerVersionWp(): Promise<VersionWp> {
   ) {
     throw new Error('Réponse inattendue de WordPress')
   }
-  return { version: donnees.version, latest: donnees.latest }
+  // Absent avec une ancienne version du connecteur : type inconnu plutôt qu'une supposition
+  const typeRecu = 'update_type' in donnees ? donnees.update_type : null
+  const update_type = typeRecu === 'minor' || typeRecu === 'major' ? typeRecu : null
+  return { version: donnees.version, latest: donnees.latest, update_type: donnees.latest === null ? null : update_type }
 }
 
 function estProblemeSante(valeur: unknown): valeur is ProblemeSante {

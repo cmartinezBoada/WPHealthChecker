@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import logo from './assets/logo.svg'
+import CarteWordPress, { type ChargementVersionWp } from './components/CarteWordPress'
 import Connexion from './components/Connexion'
 import Header from './components/Header'
 import Plugins, { type Plugin } from './components/Plugins'
@@ -145,22 +146,25 @@ function TableauDeBord({ onDeconnexion }: { onDeconnexion: () => Promise<void> }
   }, [])
 
   // Pas de carte tant que la version n'est pas chargée
-  const [versionWp, setVersionWp] = useState<HealthItem>()
+  const [versionWp, setVersionWp] = useState<ChargementVersionWp>()
 
   useEffect(() => {
     chargerVersionWp()
-      .then(({ version, latest }) =>
-        setVersionWp(
-          latest !== null
-            ? { name: 'WordPress Core', value: `v${version} → ${latest}`, status: 'warning' }
-            : { name: 'WordPress Core', value: `v${version}`, status: 'ok' }
-        )
-      )
+      .then((version) => setVersionWp({ etat: 'charge', version }))
       .catch((e: unknown) => {
         console.error('[App] Version WordPress indisponible :', e)
-        setVersionWp({ name: 'WordPress Core', value: 'Indisponible', status: 'warning' })
+        setVersionWp({ etat: 'erreur' })
       })
   }, [])
+
+  // Après la mise à jour de WordPress : en cas d'échec, l'ancienne carte reste affichée et
+  // l'erreur remonte à CarteWordPress
+  const rechargerVersionWp = async () => {
+    setVersionWp({ etat: 'charge', version: await chargerVersionWp() })
+  }
+
+  // Une seule mise à jour à la fois, plugin ou WordPress : elles touchent les mêmes fichiers
+  const [miseAJourEnCours, setMiseAJourEnCours] = useState<'plugin' | 'wordpress' | null>(null)
 
   // Pas de carte tant que la santé du site n'est pas chargée
   const [santeSite, setSanteSite] = useState<HealthItem>()
@@ -198,7 +202,7 @@ function TableauDeBord({ onDeconnexion }: { onDeconnexion: () => Promise<void> }
       })
   }, [])
 
-  const elements: HealthItem[] = [versionWp, santeSite, performance, versCarteSauvegardes(sauvegarde)].filter(
+  const elements: HealthItem[] = [santeSite, performance, versCarteSauvegardes(sauvegarde)].filter(
     (element) => element !== undefined
   )
 
@@ -231,6 +235,15 @@ function TableauDeBord({ onDeconnexion }: { onDeconnexion: () => Promise<void> }
       />
       <main className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-6">
         <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {versionWp && (
+            <CarteWordPress
+              chargement={versionWp}
+              sauvegarde={sauvegarde}
+              bloque={miseAJourEnCours === 'plugin'}
+              onOccupation={(enCours) => setMiseAJourEnCours(enCours ? 'wordpress' : null)}
+              onRecharger={rechargerVersionWp}
+            />
+          )}
           {elements.map((element) => (
             <StatusCard key={element.name} {...element} />
           ))}
@@ -245,7 +258,13 @@ function TableauDeBord({ onDeconnexion }: { onDeconnexion: () => Promise<void> }
           </p>
         )}
         {etatPlugins.etat === 'succes' && (
-          <Plugins plugins={etatPlugins.plugins} onRecharger={rechargerPlugins} sauvegarde={sauvegarde} />
+          <Plugins
+            plugins={etatPlugins.plugins}
+            onRecharger={rechargerPlugins}
+            sauvegarde={sauvegarde}
+            bloque={miseAJourEnCours === 'wordpress'}
+            onOccupation={(enCours) => setMiseAJourEnCours(enCours ? 'plugin' : null)}
+          />
         )}
       </main>
     </div>
