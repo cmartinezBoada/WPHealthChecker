@@ -96,6 +96,3 @@ Real problems met while testing on a local site, and how the tool now handles th
 - Known vulnerabilities with the Wordfence Intelligence feed
 - Deployment
 
-## License
-
-<!-- e.g. MIT, or remove this section -->
